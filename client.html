@@ -1,0 +1,202 @@
+
+<html>
+  <head> 
+    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+    <script>
+      var websocketConnection_1;
+      var websocketConnection_2;
+      var webrtcPeerConnection_1;
+      var webrtcPeerConnection_2;
+      var webrtcConfiguration;
+      var reportError;
+      var local_stream;
+
+      function getVideoElementLocal() {
+            return document.getElementById("localVideo");
+      }
+
+      function getLocalStream() {
+	    /*
+            video = document.getElementById("videofile");
+            const stream = videofile.captureStream();
+	    return stream;
+	    */
+	      var constraints = {
+		      video: {
+			       width:   {min: 320, ideal: 320},
+		               height:  {min: 240, ideal: 240},
+		             }
+		   };
+         if (navigator.mediaDevices.getUserMedia) {
+             local_stream = navigator.mediaDevices.getUserMedia(constraints);
+	     return local_stream;
+         }
+      }
+
+      function onLocalDescription(desc) {
+        console.log("Local description:" + JSON.stringify(desc));
+        webrtcPeerConnection_1.setLocalDescription(desc).then(function() {
+          websocketConnection_1.send(JSON.stringify({ type: "sdp", "data": webrtcPeerConnection_1.localDescription }));
+        }).catch(reportError);
+      }
+
+      function onIncomingSDP1(sdp) {
+        console.log("Incoming SDP: " + JSON.stringify(sdp));
+        webrtcPeerConnection_1.setRemoteDescription(sdp).catch(reportError);
+        /* Send our video/audio to the other peer */
+        local_stream_promise = getLocalStream().then((stream) => {
+           console.log('================ Adding local stream ===================== ');
+           webrtcPeerConnection_1.addStream(stream);
+           webrtcPeerConnection_1.createAnswer().then(onLocalDescription).catch(reportError);
+           getVideoElementLocal().srcObject = stream;
+        });
+      }
+
+      function onIncomingICE1(ice) {
+        var candidate = new RTCIceCandidate(ice);
+        console.log("Incoming ICE: " + JSON.stringify(ice));
+        webrtcPeerConnection_1.addIceCandidate(candidate).catch(reportError);
+      }
+
+      function onAddRemoteStream1(event) {
+	console.log("==Received video from server............................1");
+	console.log("==Current logic not supposed to receive video from server here, please fix the server");
+      }
+
+      function onIceCandidate1(event) {
+        if (event.candidate == null)
+          return;
+
+        console.log("Sending ICE candidate out (1): " + JSON.stringify(event.candidate));
+        websocketConnection_1.send(JSON.stringify({ "type": "ice", "data": event.candidate }));
+      }
+
+      function getVideoElementRemote() {
+            return document.getElementById("remoteVideo");
+      }
+
+      function onLocalDescription2(desc) {
+        console.log("Local description (2):" + JSON.stringify(desc));
+        webrtcPeerConnection_2.setLocalDescription(desc).then(function() {
+          websocketConnection_2.send(JSON.stringify({ type: "sdp", "data": webrtcPeerConnection_2.localDescription }));
+        }).catch(reportError);
+      }
+
+      function onIncomingSDP2(sdp) {
+        console.log("Incoming SDP (2): " + JSON.stringify(sdp));
+        webrtcPeerConnection_2.setRemoteDescription(sdp).catch(reportError);
+        webrtcPeerConnection_2.createAnswer().then(onLocalDescription2).catch(reportError);
+      }
+
+      function onIncomingICE2(ice) {
+        console.log("incoming ICE (2)");
+        var candidate = new RTCIceCandidate(ice);
+        console.log("Incoming ICE: " + JSON.stringify(ice));
+        webrtcPeerConnection_2.addIceCandidate(candidate).catch(reportError);
+      }
+
+      function onAddRemoteStream2(event) {
+	console.log("==== Gotcha!! Received post processed video from the server ============");
+        getVideoElementRemote().srcObject = event.streams[0];
+      }
+
+      function onIceCandidate2(event) {
+        if (event.candidate == null)
+          return;
+        console.log("Sending ICE candidate out (2): " + JSON.stringify(event.candidate));
+        websocketConnection_2.send(JSON.stringify({ "type": "ice", "data": event.candidate }));
+      }
+
+      function onServerMessage1(event) {
+	console.log("ReceivedMessageFromServer's first connection (1) " + event.data);
+        var msg;
+
+        try {
+          msg = JSON.parse(event.data);
+        } catch (e) {
+          return;
+        }
+
+        if (!webrtcPeerConnection_1) {
+	  console.log("CreateClientsidePeerConection_1 (1)");
+          webrtcPeerConnection_1 = new RTCPeerConnection(webrtcConfiguration);
+          webrtcPeerConnection_1.ontrack = onAddRemoteStream1;
+          webrtcPeerConnection_1.onicecandidate = onIceCandidate1;
+        }
+
+        switch (msg.type) {
+          case "sdp": onIncomingSDP1(msg.data); break;
+          case "ice": onIncomingICE1(msg.data); break;
+
+	  case "REQUEST_SECOND_CONNECTION": {
+            console.log("REQUEST_SECOND_CONNECTION: Server use this for sending the Coverted video (1)")
+            if (!webrtcPeerConnection_2) {
+	      console.log("CreateClientsidePeerConection_2 (1)");
+              webrtcPeerConnection_2 = new RTCPeerConnection(webrtcConfiguration);
+              webrtcPeerConnection_2.ontrack = onAddRemoteStream2;
+              webrtcPeerConnection_2.onicecandidate = onIceCandidate2;
+	    }
+	  }
+          default: break;
+        }
+      }
+
+      function onServerMessage2(event) {
+	console.log("ReceivedMessageServer's second connection " + event.data);
+        var msg;
+
+        try {
+          msg = JSON.parse(event.data);
+        } catch (e) {
+          return;
+        }
+
+        switch (msg.type) {
+          case "sdp": onIncomingSDP2(msg.data); break;
+          case "ice": onIncomingICE2(msg.data); break;
+
+          default: break;
+        }
+      }
+      
+     function playStream(hostname, port, path, configuration, reportErrorCB) {
+        var l = window.location;
+        var wsHost = (hostname != undefined) ? hostname : l.hostname;
+        var wsPort = (port != undefined) ? port : l.port;
+        var wsPath = (path != undefined) ? path : "ws";
+        if (wsPort)
+          wsPort = ":" + wsPort;
+        var wsUrl = "ws://" + wsHost + wsPort + "/" + wsPath;
+	wsUrl  = "ws://127.0.0.1:57776/ws";
+	console.log ("Static wsUrl: "+ wsUrl);
+        
+	webrtcConfiguration = configuration;
+        reportError = (reportErrorCB != undefined) ? reportErrorCB : function(text) {};
+
+        websocketConnection_1 = new WebSocket(wsUrl);
+        websocketConnection_1.addEventListener("message", onServerMessage1);
+	{
+	  //send magic nubmer request, which will be used to pair both connections
+          //websocketConnection_1.send(JSON.stringify({ "type": "connection-type", "data": "master" }));
+	  
+	}
+
+        websocketConnection_2 = new WebSocket(wsUrl);
+        websocketConnection_2.addEventListener("message", onServerMessage2);
+      }
+      
+      window.onload = function() {
+        var config = { 'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }] };
+        playStream(null, null, null, config, function (errmsg) { console.error(errmsg); });
+      };
+    
+    </script>
+  </head>
+
+  <body>
+    <div>
+      <video id="localVideo" autoplay playsinline>Your browser does not support video</video>
+      <video id="remoteVideo" autoplay playsinline>Your browser does not support video</video>
+    </div>
+  </body>
+</html>
