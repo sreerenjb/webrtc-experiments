@@ -225,6 +225,8 @@ handle_media_stream (GstPad * pad, GstElement * pipe, const char *convert_name,
     GstElement *extra_src = NULL;
     GstElement *webrtcbin = NULL;
     GstElement *send_source  = NULL;
+    GstElement *fqueue1 = NULL;
+    GstElement *fqueue2 = NULL;
     GstElement *time_overlay = gst_element_factory_make ("timeoverlay", NULL);
     GstElement *text_overlay = gst_element_factory_make ("textoverlay", NULL);
     gst_util_set_object_arg (G_OBJECT(text_overlay),
@@ -241,6 +243,8 @@ handle_media_stream (GstPad * pad, GstElement * pipe, const char *convert_name,
     gst_util_set_object_arg (G_OBJECT (filter), "caps",
       "video/x-raw, width=320, height=240");
     
+    fqueue1 = gst_element_factory_make ("queue", NULL);
+    fqueue2 = gst_element_factory_make ("queue", NULL);
 #if 0
     /*Send another stream to the client */
    
@@ -402,30 +406,42 @@ handle_media_stream (GstPad * pad, GstElement * pipe, const char *convert_name,
     GstElement *henc  = NULL;
     GstElement *hpay = NULL;
     GstElement *udpsink = NULL;
+    GstElement *facedetect = NULL;
+    GstElement *fconvert = NULL;
 
-    henc = gst_element_factory_make ("x264enc", "h264enc");
+    henc = gst_element_factory_make ("vaapih264enc", "h264enc");
     hpay = gst_element_factory_make ("rtph264pay", "h264pay");
     udpsink = gst_element_factory_make ("udpsink", "udpsink");
    
     if (!henc || !hpay || ! udpsink)
 	   exit(0);
 
+    facedetect = gst_element_factory_make ("facedetect", "opencvfacedetect");
+    fconvert = gst_element_factory_make ("videoconvert", "fconvert");
     g_object_set (henc, "tune", 0x00000004, NULL);
     g_object_set (udpsink, "host", "127.0.0.1", NULL);
     g_object_set (udpsink, "port", 5600, NULL);
 
-    gst_bin_add_many (GST_BIN (pipe), q, conv, time_overlay, text_overlay, scale, filter, henc, hpay, udpsink, NULL);
+    g_assert (conv2 && facedetect && fconvert && fqueue1 && fqueue2);
+
+    gst_bin_add_many (GST_BIN (pipe), q, conv, time_overlay, text_overlay,scale, filter , conv2, facedetect , fqueue1, fqueue2, fconvert, henc, hpay, udpsink, NULL);
     gst_element_sync_state_with_parent (q);
     gst_element_sync_state_with_parent (conv);
     gst_element_sync_state_with_parent (time_overlay);
-    //gst_element_sync_state_with_parent (sink);
+    gst_element_sync_state_with_parent (sink);
     gst_element_sync_state_with_parent (text_overlay);
     gst_element_sync_state_with_parent (scale);
     gst_element_sync_state_with_parent (filter);
+    gst_element_sync_state_with_parent (conv2);
+    gst_element_sync_state_with_parent (fqueue1);
+    gst_element_sync_state_with_parent (facedetect);
+    gst_element_sync_state_with_parent (fqueue2);
+    gst_element_sync_state_with_parent (fconvert);
     gst_element_sync_state_with_parent (henc);
     gst_element_sync_state_with_parent (hpay);
     gst_element_sync_state_with_parent (udpsink);
-    gst_element_link_many (q, conv, time_overlay, text_overlay, scale, filter, henc, hpay, udpsink, NULL);
+    gst_element_link_many (q, conv, time_overlay, /*text_overlay,*/ scale, filter, conv2, fqueue1, facedetect ,fqueue2, fconvert , henc, hpay, udpsink, NULL);
+    //gst_element_link_many (q, conv, time_overlay, text_overlay, scale, filter, conv2, facedetect , fconvert, sink,  NULL);
     g_message ("elemetntsssssssssssss linked........server side rendering");
 
     {
