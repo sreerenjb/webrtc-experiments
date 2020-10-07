@@ -188,6 +188,28 @@ _bus_watch (GstBus * bus, GstMessage * msg, GstElement * pipe)
 }
 
 static void
+send_command(SoupWebsocketConnection * connection, gchar *type, gchar *data)
+{
+  gchar *json_string;
+  JsonObject *command_json;
+  JsonObject *command_data_json;
+
+  command_json = json_object_new ();
+  json_object_set_string_member (command_json, "type", type);
+
+  command_data_json = json_object_new ();
+  json_object_set_string_member (command_data_json, "type", "parent_regid");
+  json_object_set_string_member (command_data_json, "value", "S101");
+  json_object_set_object_member (command_json, "data", command_data_json);
+
+  json_string = get_string_from_json_object (command_json);
+  json_object_unref (command_json);
+  
+  soup_websocket_connection_send_text (connection, json_string);
+  g_free (json_string);
+}
+
+static void
 handle_media_stream (GstPad * pad, GstElement * pipe, const char *convert_name,
     const char *sink_name, ReceiverEntry * receiver_entry)
 {
@@ -444,19 +466,7 @@ handle_media_stream (GstPad * pad, GstElement * pipe, const char *convert_name,
     //gst_element_link_many (q, conv, time_overlay, text_overlay, scale, filter, conv2, facedetect , fconvert, sink,  NULL);
     g_message ("elemetntsssssssssssss linked........server side rendering");
 
-    {
-        gchar *json_string;
-        JsonObject *json_object;
-
-        json_object = json_object_new ();
-        json_object_set_string_member (json_object, "type", "REQUEST_SECOND_CONNECTION");
-        json_string = get_string_from_json_object (json_object);
-        json_object_unref (json_object);
-
-        soup_websocket_connection_send_text (receiver_entry->connection, json_string);
-        g_free (json_string);
-    }
- 
+    send_command (receiver_entry->connection, "REQUEST_SECOND_CONNECTION", NULL);
     }
   }
   qpad = gst_element_get_static_pad (q, "sink");
