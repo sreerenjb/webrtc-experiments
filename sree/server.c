@@ -47,11 +47,9 @@ GMainLoop *mainloop;
 SoupServer *soup_server;
 GHashTable *receiver_entry_table;
 
-static int RenogoDone;
-
 typedef struct _ReceiverEntry ReceiverEntry;
 
-ReceiverEntry *create_receiver_entry (SoupWebsocketConnection * connection);
+ReceiverEntry *create_receiver_entry (ReceiverEntry * connection);
 void destroy_receiver_entry (gpointer receiver_entry_ptr);
 
 GstPadProbeReturn payloader_caps_event_probe_cb (GstPad * pad,
@@ -88,9 +86,14 @@ struct _ReceiverEntry
   GstElement *pipeline;
   GstElement *webrtcbin;
 
-  GstElement *webrtcbin2;
-
+  /* used to create fake sending pipeline for negotiating
+   * inital sdp, ice etc */
   GstElement *extra_src;
+
+  /* parent pipeline is for the initial connection with a client.
+   * parent is responsible for receiving the stream from client, postprocess
+   * and create a child process to send the processed stream to the client */
+  gboolean is_parent;
 };
 
 static void
@@ -197,14 +200,15 @@ send_command(SoupWebsocketConnection * connection, gchar *type, gchar *data)
   command_json = json_object_new ();
   json_object_set_string_member (command_json, "type", type);
 
+#if 0
   command_data_json = json_object_new ();
   json_object_set_string_member (command_data_json, "type", "parent_regid");
   json_object_set_string_member (command_data_json, "value", "S101");
   json_object_set_object_member (command_json, "data", command_data_json);
+#endif  
 
   json_string = get_string_from_json_object (command_json);
   json_object_unref (command_json);
-  
   soup_websocket_connection_send_text (connection, json_string);
   g_free (json_string);
 }
@@ -512,7 +516,7 @@ on_incoming_stream (GstElement * webrtc, GstPad * pad,
   if (GST_PAD_DIRECTION (pad) != GST_PAD_SRC)
     return;
 
-  g_message ("Incoming Stream received...............%d",RenogoDone);
+  g_message ("Incoming Stream received...............%d",receiver_entry->is_parent);
   
   decodebin = gst_element_factory_make ("decodebin", NULL);
   g_signal_connect (decodebin, "pad-added",
@@ -527,24 +531,27 @@ on_incoming_stream (GstElement * webrtc, GstPad * pad,
 }
 
 ReceiverEntry *
-create_receiver_entry (SoupWebsocketConnection * connection)
+create_receiver_entry (ReceiverEntry *receiver_entry)
 {
   GError *error;
-  ReceiverEntry *receiver_entry;
   GstCaps *video_caps;
   GstWebRTCRTPTransceiver *trans = NULL;
   GstElement *webbin = NULL;
   GArray *transceivers;
+  SoupWebsocketConnection * connection = NULL;
 
-  g_message ("CreateReceiverEntry...RenogoDone=%d Connnection=%p ", RenogoDone,connection);
-  receiver_entry = g_slice_alloc0 (sizeof (ReceiverEntry));
-  receiver_entry->connection = connection;
+  if (receiver_entry) {
+    connection = receiver_entry->connection;
+  } else {
+    g_message ("Fixme: CreateReceiverEntry..Connnection=%p ", connection);
+    receiver_entry = g_slice_alloc0 (sizeof (ReceiverEntry));
+    receiver_entry->connection = connection;
 
-  g_object_ref (G_OBJECT (connection));
+    g_object_ref (G_OBJECT (connection));
 
-  g_signal_connect (G_OBJECT (connection), "message",
+    g_signal_connect (G_OBJECT (connection), "message",
       G_CALLBACK (soup_websocket_message_cb), (gpointer) receiver_entry);
-
+  } 
   error = NULL;
 
 //#if 0 
@@ -574,25 +581,12 @@ create_receiver_entry (SoupWebsocketConnection * connection)
   g_assert (rtpcaps);
   g_object_set (rtpcapsfilter, "caps", rtpcaps, NULL);
 
-  if (!RenogoDone) {
+  if (receiver_entry->is_parent) {
   receiver_entry->extra_src =
         gst_parse_bin_from_description (SEND_SRC ("smpte"), TRUE, NULL);
 
   }
   else {
-#if 0
-	  /* udpsrc local depay & render, works fine!!! */
-  GstElement *dec_display = gst_parse_bin_from_description (RECEIVE_H264 (), TRUE, NULL);
-  receiver_entry->extra_src =
-        gst_parse_bin_from_description (SEND_UDP_SRC (), TRUE, NULL);
-
-  receiver_entry->pipeline = gst_pipeline_new ("pipeline");
-      gst_bin_add_many (GST_BIN (receiver_entry->pipeline), receiver_entry->extra_src, dec_display, NULL);
-      gst_element_link_many (receiver_entry->extra_src, dec_display, NULL);
-      gst_element_set_state (receiver_entry->pipeline, GST_STATE_PLAYING);
-      g_message ("udpsrc local depay, decode & render pipeline.................................................");
-      return receiver_entry;
-#endif
   g_message ("create secondary sourceeeeeeeeeeeeeeeeeeeeeeeeeeee");
   receiver_entry->extra_src =
         gst_parse_bin_from_description (SEND_UDP_SRC (), TRUE, NULL);
@@ -658,19 +652,17 @@ create_receiver_entry (SoupWebsocketConnection * connection)
   }
 
   /* Incoming streams will be exposed via this signal */
-  if (!RenogoDone) {
+  if (receiver_entry->is_parent) {
   g_signal_connect (receiver_entry->webrtcbin, "pad-added",
       G_CALLBACK (on_incoming_stream), receiver_entry);
-  }
+  } else {
 
-  if (RenogoDone) {
-
-  g_signal_emit_by_name (receiver_entry->webrtcbin, "get-transceivers",
-      &transceivers);
-  g_assert (transceivers != NULL && transceivers->len > 0);
-  trans = g_array_index (transceivers, GstWebRTCRTPTransceiver *, 0);
-  trans->direction = GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY;
-  g_array_unref (transceivers);
+    g_signal_emit_by_name (receiver_entry->webrtcbin, "get-transceivers",
+        &transceivers);
+    g_assert (transceivers != NULL && transceivers->len > 0);
+    trans = g_array_index (transceivers, GstWebRTCRTPTransceiver *, 0);
+    trans->direction = GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY;
+    g_array_unref (transceivers);
   }
   g_signal_connect (receiver_entry->webrtcbin, "on-negotiation-needed",
       G_CALLBACK (on_negotiation_needed_cb), (gpointer) receiver_entry);
@@ -797,13 +789,13 @@ on_negotiation_needed_cb (GstElement * webrtcbin, gpointer user_data)
   GstPromise *promise;
   ReceiverEntry *receiver_entry = (ReceiverEntry *) user_data;
 
-  gst_print ("Creating negotiation offer.............. %d\n",RenogoDone);
+  gst_print ("Creating negotiation offer........ %d\n",receiver_entry->is_parent);
 
   promise = gst_promise_new_with_change_func (on_offer_created_cb,
       (gpointer) receiver_entry, NULL);
   g_signal_emit_by_name (G_OBJECT (webrtcbin), "create-offer", NULL, promise);
 }
-/***************************** Newly Added *************************/
+#if 0
 void
 on_offer_created_cb_2 (GstPromise * promise, gpointer user_data)
 {
@@ -885,8 +877,8 @@ on_ice_candidate_cb_2 (G_GNUC_UNUSED GstElement * webrtcbin, guint mline_index,
   soup_websocket_connection_send_text (receiver_entry->connection, json_string);
   g_free (json_string);
 }
+#endif
 
-/**************END newly created functions *******************/
 void
 on_ice_candidate_cb (G_GNUC_UNUSED GstElement * webrtcbin, guint mline_index,
     gchar * candidate, gpointer user_data)
@@ -896,7 +888,7 @@ on_ice_candidate_cb (G_GNUC_UNUSED GstElement * webrtcbin, guint mline_index,
   gchar *json_string;
   ReceiverEntry *receiver_entry = (ReceiverEntry *) user_data;
 
-  gst_print ("on ice candiate cb.............. %d\n",RenogoDone);
+  gst_print ("on ice candiate cb.............. %d\n",receiver_entry->is_parent);
   ice_json = json_object_new ();
   json_object_set_string_member (ice_json, "type", "ice");
 
@@ -927,7 +919,7 @@ soup_websocket_message_cb (G_GNUC_UNUSED SoupWebsocketConnection * connection,
   JsonParser *json_parser = NULL;
   ReceiverEntry *receiver_entry = (ReceiverEntry *) user_data;
 
-  g_message ("TTT: ===========WebSocketReceived message============= %d, connection %p \n",RenogoDone, connection);
+  g_message ("TTT: ===========WebSocketReceived message============= %d, connection %p \n",receiver_entry->is_parent, connection);
 
   switch (data_type) {
     case SOUP_WEBSOCKET_DATA_BINARY:
@@ -957,6 +949,24 @@ soup_websocket_message_cb (G_GNUC_UNUSED SoupWebsocketConnection * connection,
     goto unknown_message;
 
   root_json_object = json_node_get_object (root_json);
+  
+  if (json_object_has_member (root_json_object, "REPLY_CONNECTION_TYPE")) {
+    const gchar *reply_type_string;
+    reply_type_string = json_object_get_string_member (
+		    root_json_object, "REPLY_CONNECTION_TYPE");
+
+    if (!g_strcmp0 (reply_type_string, "parent"))
+      receiver_entry->is_parent = TRUE;
+    else
+      receiver_entry->is_parent = FALSE;
+
+    g_message ("Reply Type String === %s is_parent=%d", reply_type_string,receiver_entry->is_parent);
+
+    receiver_entry = create_receiver_entry (receiver_entry);
+
+    g_hash_table_replace (receiver_entry_table, connection, receiver_entry);
+    goto cleanup;
+  }
 
   if (!json_object_has_member (root_json_object, "type")) {
     g_error ("Received message without type field\n");
@@ -1099,28 +1109,24 @@ soup_websocket_handler (G_GNUC_UNUSED SoupServer * server,
     SoupWebsocketConnection * connection, G_GNUC_UNUSED const char *path,
     G_GNUC_UNUSED SoupClientContext * client_context, gpointer user_data)
 {
-  ReceiverEntry *receiver_entry;
+  ReceiverEntry *receiver_entry = NULL;
   GHashTable *receiver_entry_table = (GHashTable *) user_data;
   static int k  =0;
-
-  g_message ("Processing web socket connection...");
 
   g_signal_connect (G_OBJECT (connection), "closed",
       G_CALLBACK (soup_websocket_closed_cb), (gpointer) receiver_entry_table);
 
-  if (!k)
-    RenogoDone = 0;
-  else
-    RenogoDone = 1;
-  k++;
-  
-  receiver_entry = create_receiver_entry (connection);
+  receiver_entry = g_slice_alloc0 (sizeof (ReceiverEntry));
+  receiver_entry->connection = connection;
+  g_object_ref (G_OBJECT (connection));
 
-  g_message ("Processing new websocket connection %p = , RenogoDone = %d, receiver_entry = %p", (gpointer) connection, RenogoDone, receiver_entry);
+  g_message ("Processing web socket connection...%p",connection);
 
-  g_hash_table_replace (receiver_entry_table, connection, receiver_entry);
+  g_signal_connect (G_OBJECT (connection), "message",
+      G_CALLBACK (soup_websocket_message_cb), (gpointer) receiver_entry);
+
+  send_command(connection, "REQUEST_CONNECTION_TYPE", NULL);
 }
-
 
 static gchar *
 get_string_from_json_object (JsonObject * object)
@@ -1155,8 +1161,6 @@ exit_sighandler (gpointer user_data)
 int
 main (int argc, char *argv[])
 {
-
-  RenogoDone = 0;
 
   setlocale (LC_ALL, "");
   gst_init (&argc, &argv);
