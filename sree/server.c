@@ -60,11 +60,6 @@ void on_negotiation_needed_cb (GstElement * webrtcbin, gpointer user_data);
 void on_ice_candidate_cb (GstElement * webrtcbin, guint mline_index,
     gchar * candidate, gpointer user_data);
 
-void on_offer_created_cb_2 (GstPromise * promise, gpointer user_data);
-void on_negotiation_needed_cb_2 (GstElement * webrtcbin, gpointer user_data);
-void on_ice_candidate_cb_2 (GstElement * webrtcbin, guint mline_index,
-    gchar * candidate, gpointer user_data);
-
 void soup_websocket_message_cb (SoupWebsocketConnection * connection,
     SoupWebsocketDataType data_type, GBytes * message, gpointer user_data);
 void soup_websocket_closed_cb (SoupWebsocketConnection * connection,
@@ -96,58 +91,31 @@ struct _ReceiverEntry
   gboolean is_parent;
 };
 
-static void
-_element_message (GstElement * parent, GstMessage * msg, GstElement *pipe)
-{
-  switch (GST_MESSAGE_TYPE (msg)) {
-    case GST_MESSAGE_EOS:{
-      GstElement *receive, *webrtc;
-      GstPad *pad, *peer;
-
-      g_print ("Got element EOS message from %s parent %s\n",
-          GST_OBJECT_NAME (msg->src), GST_OBJECT_NAME (parent));
-
-      receive = GST_ELEMENT (msg->src);
-
-      pad = gst_element_get_static_pad (receive, "sink");
-      peer = gst_pad_get_peer (pad);
-
-      webrtc = GST_ELEMENT (gst_pad_get_parent (peer));
-      gst_bin_remove (GST_BIN (pipe), receive);
-
-      gst_pad_unlink (peer, pad);
-      gst_element_release_request_pad (webrtc, peer);
-
-      gst_object_unref (pad);
-      gst_object_unref (peer);
-
-      gst_element_set_state (receive, GST_STATE_NULL);
-      break;
-    }
-    default:
-      break;
-  }
-}
 
 static gboolean
 _bus_watch (GstBus * bus, GstMessage * msg, GstElement * pipe)
 {
   switch (GST_MESSAGE_TYPE (msg)) {
     case GST_MESSAGE_STATE_CHANGED:
+      /* Debug: To generate the graph of the pipelines, enable the
+       * code below and set GST_DEBUG_DUMP_DOT_DIR before running the
+       * server application */
+#if 0
       if (GST_ELEMENT (msg->src) == pipe) {
         GstState old, new, pending;
-
         gst_message_parse_state_changed (msg, &old, &new, &pending);
 
         {
           gchar *dump_name = g_strconcat ("state_changed-",
               gst_element_state_get_name (old), "_",
               gst_element_state_get_name (new), NULL);
+	  g_message ("dump_name %s",dump_name);
           GST_DEBUG_BIN_TO_DOT_FILE_WITH_TS (GST_BIN (msg->src),
               GST_DEBUG_GRAPH_SHOW_ALL, dump_name);
           g_free (dump_name);
         }
       }
+#endif
       break;
     case GST_MESSAGE_ERROR:{
       GError *err = NULL;
@@ -170,17 +138,6 @@ _bus_watch (GstBus * bus, GstMessage * msg, GstElement * pipe)
           GST_DEBUG_GRAPH_SHOW_ALL, "eos");
       g_print ("EOS received\n");
       g_main_loop_quit (loop);
-      break;
-    }
-    case GST_MESSAGE_ELEMENT:{
-      const GstStructure *s = gst_message_get_structure (msg);
-      if (g_strcmp0 (gst_structure_get_name (s), "GstBinForwarded") == 0) {
-        GstMessage *sub_msg;
-
-        gst_structure_get (s, "message", GST_TYPE_MESSAGE, &sub_msg, NULL);
-        _element_message (GST_ELEMENT (msg->src), sub_msg, pipe);
-        gst_message_unref (sub_msg);
-      }
       break;
     }
     default:
@@ -618,11 +575,11 @@ create_receiver_entry (ReceiverEntry *receiver_entry)
 
   g_assert (receiver_entry->pipeline && receiver_entry->webrtcbin);
 
-  //g_object_set (receiver_entry->pipeline, "message-forward", TRUE, NULL);
+  g_object_set (receiver_entry->pipeline, "message-forward", TRUE, NULL);
 
-  //bus = gst_pipeline_get_bus (GST_PIPELINE (receiver_entry->pipeline));
+  bus = gst_pipeline_get_bus (GST_PIPELINE (receiver_entry->pipeline));
 
-  //gst_bus_add_watch (bus, (GstBusFunc) _bus_watch, receiver_entry->pipeline);
+  gst_bus_add_watch (bus, (GstBusFunc) _bus_watch, receiver_entry->pipeline);
 
   g_object_set (receiver_entry->webrtcbin, "bundle-policy", 3, NULL);
   g_object_set (receiver_entry->webrtcbin, "stun-server", "stun://stun.l.google.com:19302", NULL);
@@ -795,89 +752,6 @@ on_negotiation_needed_cb (GstElement * webrtcbin, gpointer user_data)
       (gpointer) receiver_entry, NULL);
   g_signal_emit_by_name (G_OBJECT (webrtcbin), "create-offer", NULL, promise);
 }
-#if 0
-void
-on_offer_created_cb_2 (GstPromise * promise, gpointer user_data)
-{
-  gchar *sdp_string;
-  gchar *json_string;
-  gchar *text;
-  JsonObject *sdp_json;
-  JsonObject *sdp_data_json;
-  GstStructure const *reply;
-  GstPromise *local_desc_promise;
-  GstWebRTCSessionDescription *offer = NULL;
-  ReceiverEntry *receiver_entry = (ReceiverEntry *) user_data;
-
-  reply = gst_promise_get_reply (promise);
-  gst_structure_get (reply, "offer", GST_TYPE_WEBRTC_SESSION_DESCRIPTION,
-      &offer, NULL);
-  gst_promise_unref (promise);
-
-  local_desc_promise = gst_promise_new ();
-  g_signal_emit_by_name (receiver_entry->webrtcbin2, "set-local-description",
-      offer, local_desc_promise);
-  gst_promise_interrupt (local_desc_promise);
-  gst_promise_unref (local_desc_promise);
-
-  sdp_string = gst_sdp_message_as_text (offer->sdp);
-  gst_print ("Negotiation offer created:\n%s\n", sdp_string);
-
-  sdp_json = json_object_new ();
-  json_object_set_string_member (sdp_json, "type", "sdp");
-
-  sdp_data_json = json_object_new ();
-  json_object_set_string_member (sdp_data_json, "type", "offer");
-  json_object_set_string_member (sdp_data_json, "sdp", sdp_string);
-  json_object_set_object_member (sdp_json, "data", sdp_data_json);
-
-  json_string = get_string_from_json_object (sdp_json);
-  json_object_unref (sdp_json);
-
-  soup_websocket_connection_send_text (receiver_entry->connection, json_string);
-  g_free (json_string);
-  g_free (sdp_string);
-
-  gst_webrtc_session_description_free (offer);
-
-}
-void
-on_negotiation_needed_cb_2 (GstElement * webrtcbin, gpointer user_data)
-{
-  GstPromise *promise;
-  ReceiverEntry *receiver_entry = (ReceiverEntry *) user_data;
-
-  gst_print ("Creating negotiation offer\n");
-
-  promise = gst_promise_new_with_change_func (on_offer_created_cb,
-      (gpointer) receiver_entry, NULL);
-  g_signal_emit_by_name (G_OBJECT (webrtcbin), "create-offer", NULL, promise);
-}
-
-void
-on_ice_candidate_cb_2 (G_GNUC_UNUSED GstElement * webrtcbin, guint mline_index,
-    gchar * candidate, gpointer user_data)
-{
-  JsonObject *ice_json;
-  JsonObject *ice_data_json;
-  gchar *json_string;
-  ReceiverEntry *receiver_entry = (ReceiverEntry *) user_data;
-
-  ice_json = json_object_new ();
-  json_object_set_string_member (ice_json, "type", "ice");
-
-  ice_data_json = json_object_new ();
-  json_object_set_int_member (ice_data_json, "sdpMLineIndex", mline_index);
-  json_object_set_string_member (ice_data_json, "candidate", candidate);
-  json_object_set_object_member (ice_json, "data", ice_data_json);
-
-  json_string = get_string_from_json_object (ice_json);
-  json_object_unref (ice_json);
-
-  soup_websocket_connection_send_text (receiver_entry->connection, json_string);
-  g_free (json_string);
-}
-#endif
 
 void
 on_ice_candidate_cb (G_GNUC_UNUSED GstElement * webrtcbin, guint mline_index,
