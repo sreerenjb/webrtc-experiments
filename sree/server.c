@@ -341,7 +341,7 @@ on_incoming_stream (GstElement * webrtc, GstPad * pad,
 ReceiverEntry *
 create_receiver_entry (ReceiverEntry *receiver_entry)
 {
-  GError *error;
+  GError *error = NULL;
   GstCaps *video_caps;
   GstWebRTCRTPTransceiver *trans = NULL;
   GArray *transceivers;
@@ -366,19 +366,18 @@ create_receiver_entry (ReceiverEntry *receiver_entry)
     g_signal_connect (G_OBJECT (connection), "message",
       G_CALLBACK (soup_websocket_message_cb), (gpointer) receiver_entry);
   } 
-  error = NULL;
 
   udpsrc = gst_element_factory_make ("udpsrc", "udpsrc");
   rtpjitterbuffer = gst_element_factory_make ("rtpjitterbuffer", "rtpjitterbuffer");
   rtpcapsfilter = gst_element_factory_make ("capsfilter", "rtpcapsfilter");
 
-  g_assert (udpsrc && rtpjitterbuffer);
+  g_assert (udpsrc && rtpjitterbuffer && rtpcapsfilter);
+
   g_object_set (udpsrc, "address", "127.0.0.1", NULL);
   g_object_set (udpsrc, "port", 5600, NULL);
   g_object_set (udpsrc, "close-socket", FALSE, NULL);
   g_object_set (udpsrc, "multicast-iface", FALSE, NULL);
   g_object_set (udpsrc, "auto-multicast", TRUE, NULL);
-
 
   rtpcaps = gst_caps_new_simple ("application/x-rtp",
 		  "encoding-name", G_TYPE_STRING,"H264",
@@ -387,41 +386,20 @@ create_receiver_entry (ReceiverEntry *receiver_entry)
   g_object_set (rtpcapsfilter, "caps", rtpcaps, NULL);
 
   if (receiver_entry->is_parent) {
-  receiver_entry->extra_src =
+    receiver_entry->extra_src =
         gst_parse_bin_from_description (SEND_SRC ("smpte"), TRUE, NULL);
-
-  }
-  else {
-  g_message ("create secondary sourceeeeeeeeeeeeeeeeeeeeeeeeeeee");
-  receiver_entry->extra_src =
+  } else {
+    receiver_entry->extra_src =
         gst_parse_bin_from_description (SEND_UDP_SRC (), TRUE, NULL);
-  //receiver_entry->extra_src =
-    //    gst_parse_bin_from_description (SEND_SRC_H264 ("snow"), TRUE, NULL);
-
-#if 0
-    /* decode & display the send stream, working */
-    {
-      GstElement *display_pipeline = gst_parse_bin_from_description (RECEIVE_VP8(), TRUE, NULL);
-      g_assert (display_pipeline);
-      receiver_entry->pipeline = gst_pipeline_new ("pipeline");
-      gst_bin_add_many (GST_BIN (receiver_entry->pipeline), receiver_entry->extra_src, display_pipeline, NULL);
-      gst_element_link_many (receiver_entry->extra_src, display_pipeline, NULL);
-      gst_element_set_state (receiver_entry->pipeline, GST_STATE_PLAYING);
-      g_message ("local depay, decode & render pipeline.................................................");
-      return receiver_entry;
-    }
-#endif
   }
 
   receiver_entry->pipeline = gst_pipeline_new ("pipeline");
 
   receiver_entry->webrtcbin = gst_element_factory_make ("webrtcbin", "webrtcbin");
 
-  if (!receiver_entry->extra_src || !receiver_entry->pipeline || !receiver_entry->webrtcbin) {
-  	  exit(0);
-  }
-
-  g_assert (receiver_entry->pipeline && receiver_entry->webrtcbin);
+  g_assert (receiver_entry->extra_src && receiver_entry->pipeline && receiver_entry->webrtcbin); 
+  g_object_set (receiver_entry->webrtcbin, "bundle-policy", 3, NULL);
+  g_object_set (receiver_entry->webrtcbin, "stun-server", "stun://stun.l.google.com:19302", NULL);
 
   g_object_set (receiver_entry->pipeline, "message-forward", TRUE, NULL);
 
@@ -429,31 +407,9 @@ create_receiver_entry (ReceiverEntry *receiver_entry)
 
   gst_bus_add_watch (bus, (GstBusFunc) _bus_watch, receiver_entry->pipeline);
 
-  g_object_set (receiver_entry->webrtcbin, "bundle-policy", 3, NULL);
-  g_object_set (receiver_entry->webrtcbin, "stun-server", "stun://stun.l.google.com:19302", NULL);
-
-
   gst_bin_add_many (GST_BIN (receiver_entry->pipeline), receiver_entry->extra_src, receiver_entry->webrtcbin, NULL);
-  //gst_bin_add_many (GST_BIN (receiver_entry->pipeline), udpsrc, rtpjitterbuffer, rtpcapsfilter, receiver_entry->webrtcbin, NULL);
-
-  //gst_element_sync_state_with_parent (receiver_entry->extra_src);
-  //extra_src_pad = receiver_entry->extra_src->srcpads->data;
-  //if (!extra_src_pad) {
-  //	  g_message ("Failed to get extra source pad");
-  //	  exit(0);
-  //}
 
   gst_element_link_many (receiver_entry->extra_src, receiver_entry->webrtcbin, NULL);
-  //gst_element_link_many (udpsrc, rtpjitterbuffer, rtpcapsfilter, receiver_entry->webrtcbin, NULL);
-#if 0
-  webrtcpad = gst_element_get_request_pad (receiver_entry->webrtcbin, "sink%d");
-  if (!webrtcpad) {
-	  g_message ("Failed to get webrtc sinkpad");
-	  exit(0);
-  }
-  gst_pad_link (extra_src_pad, webrtcpad);
-#endif
-
 
   /* Incoming streams will be exposed via this signal */
   if (receiver_entry->is_parent) {
@@ -548,44 +504,7 @@ on_offer_created_cb (GstPromise * promise, gpointer user_data)
 
   gst_webrtc_session_description_free (offer);
 
-#if 0
-  if (offer->type == GST_WEBRTC_SDP_TYPE_OFFER) {
-    gst_print ("Sending offer:\n%s\n", text);
-    json_object_set_string_member (sdp_json, "type", "offer");
-  } else if (offer->type == GST_WEBRTC_SDP_TYPE_ANSWER) {
-    gst_print ("Sending answer:\n%s\n", text);
-    json_object_set_string_member (sdp_json, "type", "answer");
-  } else {
-    g_assert_not_reached ();
-  }
-
-  json_object_set_string_member (sdp_json, "sdp", sdp_string);
-  
-   //g_free (sdp_string);
-  //json_object_set_string_member (sdp_json, "type", "sdp");
-
-  sdp_data_json = json_object_new ();
-  json_object_set_object_member (sdp_data_json, "sdp", sdp_json);
-  text = get_string_from_json_object (sdp_data_json);
-  json_object_unref (sdp_data_json);
-
-  //json_object_set_string_member (sdp_data_json, "type", "offer");
-  //json_object_set_string_member (sdp_data_json, "sdp", sdp_string);
-  //json_object_set_object_member (sdp_json, "data", sdp_data_json);
-
-  //json_string = get_string_from_json_object (sdp_json);
-  //json_object_unref (sdp_json);
-
-  //soup_websocket_connection_send_text (receiver_entry->connection, json_string);
-  soup_websocket_connection_send_text (receiver_entry->connection, text);
-  //g_free (text);
-  //g_free (json_string);
-  //g_free (sdp_string);
-
-  gst_webrtc_session_description_free (offer);
-#endif
 }
-
 
 void
 on_negotiation_needed_cb (GstElement * webrtcbin, gpointer user_data)
@@ -640,7 +559,7 @@ soup_websocket_message_cb (G_GNUC_UNUSED SoupWebsocketConnection * connection,
   JsonParser *json_parser = NULL;
   ReceiverEntry *receiver_entry = (ReceiverEntry *) user_data;
 
-  g_message ("TTT: ===========WebSocketReceived message============= %d, connection %p \n",receiver_entry->is_parent, connection);
+  g_message ("===========WebSocketReceived message============= %d, connection %p \n",receiver_entry->is_parent, connection);
 
   switch (data_type) {
     case SOUP_WEBSOCKET_DATA_BINARY:
@@ -749,7 +668,6 @@ soup_websocket_message_cb (G_GNUC_UNUSED SoupWebsocketConnection * connection,
         answer, promise);
     gst_promise_interrupt (promise);
     gst_promise_unref (promise);
-    //gst_webrtc_session_description_free (answer);
   } else if (g_strcmp0 (type_string, "ice") == 0) {
     guint mline_index;
     const gchar *candidate_string;
