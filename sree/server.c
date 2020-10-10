@@ -157,6 +157,7 @@ send_command(SoupWebsocketConnection * connection, gchar *type, gchar *data)
   command_json = json_object_new ();
   json_object_set_string_member (command_json, "type", type);
 
+  //ToDo: Can be used for secure random id based registration
 #if 0
   command_data_json = json_object_new ();
   json_object_set_string_member (command_data_json, "type", "parent_regid");
@@ -200,9 +201,8 @@ handle_media_stream (GstPad * pad, GstElement * pipe, const char *convert_name,
     gst_element_sync_state_with_parent (sink);
     gst_element_link_many (q, conv, resample, sink, NULL);
   } else {
+    /***** START: Use udpsink to send the stream to another process ****/
     GstWebRTCRTPTransceiver *trans = NULL;
-    GstElement *smpte_src = NULL;
-    GstElement *smpte_convert = NULL;
     GstElement *scale = NULL;
     GstElement *filter = NULL;
     GstElement *extra_src = NULL;
@@ -210,8 +210,17 @@ handle_media_stream (GstPad * pad, GstElement * pipe, const char *convert_name,
     GstElement *send_source  = NULL;
     GstElement *fqueue1 = NULL;
     GstElement *fqueue2 = NULL;
-    GstElement *time_overlay = gst_element_factory_make ("timeoverlay", NULL);
-    GstElement *text_overlay = gst_element_factory_make ("textoverlay", NULL);
+    GstElement *henc  = NULL;
+    GstElement *hpay = NULL;
+    GstElement *udpsink = NULL;
+    GstElement *facedetect = NULL;
+    GstElement *fconvert = NULL;
+    GstElement *time_overlay = NULL;
+    GstElement *text_overlay = NULL;
+    
+    time_overlay = gst_element_factory_make ("timeoverlay", NULL);
+
+    text_overlay = gst_element_factory_make ("textoverlay", NULL);
     gst_util_set_object_arg (G_OBJECT(text_overlay),
 		    "text","We are Post processing!");
     gst_util_set_object_arg (G_OBJECT(text_overlay), "valignment", "top");
@@ -219,195 +228,39 @@ handle_media_stream (GstPad * pad, GstElement * pipe, const char *convert_name,
     gst_util_set_object_arg (G_OBJECT(text_overlay), "font-desc", "Sans, 72");
     
     conv2 = gst_element_factory_make ("videoconvert", "videoconvert2");
-    
     scale = gst_element_factory_make ("videoscale", "videoscale");
-    filter = gst_element_factory_make ("capsfilter", "fitler");
 
+    filter = gst_element_factory_make ("capsfilter", "fitler");
     gst_util_set_object_arg (G_OBJECT (filter), "caps",
       "video/x-raw, width=320, height=240");
     
     fqueue1 = gst_element_factory_make ("queue", NULL);
     fqueue2 = gst_element_factory_make ("queue", NULL);
-#if 0
-    /*Send another stream to the client */
-   
-    {  
-    //step1: remove previous stream
-    GstPad *smpte_src_pad , *peer;
-    GstWebRTCRTPTransceiver *transceiver = NULL;
-    g_message ("===== Removing old stream===========");
-
-    smpte_src_pad = gst_element_get_static_pad (receiver_entry->extra_src, "src");
-    g_assert (smpte_src_pad);
-
-    peer = gst_pad_get_peer (smpte_src_pad);
-    gst_element_send_event (receiver_entry->extra_src, gst_event_new_eos ());
-
-    g_object_get (peer, "transceiver", &transceiver, NULL);
-    g_object_set (transceiver, "direction",
-        GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_INACTIVE, NULL);
-
-    gst_element_set_locked_state (receiver_entry->extra_src, TRUE);
-    gst_element_set_state (receiver_entry->extra_src, GST_STATE_NULL);
-    gst_pad_unlink (smpte_src_pad, peer);
-    gst_element_release_request_pad (receiver_entry->webrtcbin, peer);
-
-    gst_object_unref (peer);
-    gst_object_unref (smpte_src_pad);
-
-    gst_bin_remove (GST_BIN (receiver_entry->pipeline), receiver_entry->extra_src);
-    receiver_entry->extra_src = NULL;
-    }
-#endif
-#if 0
-    //step2: add new stream
-    receiver_entry->extra_src =
-        gst_parse_bin_from_description (SEND_SRC ("circular"), TRUE, NULL);
-
-    gst_element_set_locked_state (receiver_entry->extra_src, TRUE);
-    gst_bin_add (GST_BIN (receiver_entry->pipeline), receiver_entry->extra_src);
-    gst_element_link (receiver_entry->extra_src, receiver_entry->webrtcbin);
-    gst_element_set_locked_state (receiver_entry->extra_src, FALSE);
-    gst_element_sync_state_with_parent (receiver_entry->extra_src);
-
-     
-#endif
-
-#if 0
-   //Use the existing webrtcbin to send the reencoded stream
-    GstElement *queue2 = gst_element_factory_make ("queue2", NULL);
-    GstElement *enc = gst_element_factory_make ("vp8enc", NULL);
-    GstElement *rtppay = gst_element_factory_make ("rtpvp8pay", NULL);
-    GstElement *queue3 = gst_element_factory_make ("queue", NULL);
-    /*
-    GstCaps *video_caps =
-      gst_caps_from_string
-      ("application/x-rtp,media=video,encoding-name=VP8,payload="
-      RTP_PAYLOAD_TYPE
-      "");
-    g_signal_emit_by_name (receiver_entry->webrtcbin, "add-transceiver",
-      GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_RECVONLY, video_caps, NULL, &trans);
-    gst_element_sync_state_with_parent (receiver_entry->webrtcbin);
-    gst_caps_unref (video_caps);
-    gst_object_unref (trans);
-    */
-    GstCaps *video_caps =
-      gst_caps_from_string
-      ("application/x-rtp,media=video,encoding-name=H264,payload="
-      RTP_PAYLOAD_TYPE
-      ",clock-rate=90000,packetization-mode=(string)1, profile-level-id=(string)42c016");
-    g_signal_emit_by_name (receiver_entry->webrtcbin, "add-transceiver",
-      GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDRECV, video_caps, NULL, &trans);
-    gst_caps_unref (video_caps);
-    gst_object_unref (trans);
-
-
-    g_object_set (enc, "deadline", 1, NULL);
-#endif 
-#if 0
-    //Adding a new webrtcbin and negotiation
-    GstElement *webrtcbin2 = gst_element_factory_make ("webrtcbin", NULL);
-    GstElement *queue2 = gst_element_factory_make ("queue2", NULL);
-    GstElement *enc = gst_element_factory_make ("vp8enc", NULL);
-    GstElement *rtppay = gst_element_factory_make ("rtpvp8pay", NULL);
-    GstElement *queue3 = gst_element_factory_make ("queue", NULL);
-    GstCaps *video_caps =
-      gst_caps_from_string
-      ("application/x-rtp,media=video,encoding-name=VP8,payload="
-      RTP_PAYLOAD_TYPE
-      "");
-    g_signal_emit_by_name (webrtcbin2, "add-transceiver",
-      GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDRECV, video_caps, NULL, &trans);
-    gst_caps_unref (video_caps);
-    gst_object_unref (trans);
-
-    g_object_set (enc, "deadline", 1, NULL);
-    receiver_entry->webrtcbin2 = webrtcbin2;
-
-    g_signal_connect (webrtcbin2, "on-negotiation-needed",
-      G_CALLBACK (on_negotiation_needed_cb_2), (gpointer) receiver_entry);
-
-    g_signal_connect (webrtcbin2, "on-ice-candidate",
-      G_CALLBACK (on_ice_candidate_cb_2), (gpointer) receiver_entry);
-
-    gst_bin_add_many (GST_BIN (pipe), q, conv, text_overlay, webrtcbin2, queue2, enc, rtppay, queue3, NULL);
-    gst_element_sync_state_with_parent (q);
-    gst_element_sync_state_with_parent (conv);
-    gst_element_sync_state_with_parent (text_overlay);
-    gst_element_sync_state_with_parent (queue2);
-    gst_element_sync_state_with_parent (enc);
-    gst_element_sync_state_with_parent (rtppay);
-    gst_element_sync_state_with_parent (queue3);
-    gst_element_sync_state_with_parent (webrtcbin2);
-    gst_element_link_many (q, conv, text_overlay, queue2, enc, rtppay, queue3, webrtcbin2, NULL);
-#endif
-  
-#if 0    
-    //Working Solution 
-    gst_bin_add_many (GST_BIN (pipe), q, conv, text_overlay, scale, filter, sink, NULL);
-    gst_element_sync_state_with_parent (q);
-    gst_element_sync_state_with_parent (conv);
-    gst_element_sync_state_with_parent (sink);
-    gst_element_sync_state_with_parent (text_overlay);
-    gst_element_sync_state_with_parent (scale);
-    gst_element_sync_state_with_parent (filter);
-    gst_element_link_many (q, conv, text_overlay, scale, filter, sink, NULL);
-    g_message ("elemetntsssssssssssss linked........server side rendering");
-#endif
-   
-#if 0 
-    //dynamically connect the converted webrtcbin output to webrtc input
-    gst_element_set_locked_state (q, TRUE);
-    gst_element_set_locked_state (conv, TRUE);
-    gst_element_set_locked_state (text_overlay, TRUE);
-    gst_element_set_locked_state (scale, TRUE);
-    gst_element_set_locked_state (conv2, TRUE);
-    gst_bin_add_many (GST_BIN (pipe), q, conv, text_overlay, scale, conv2,  NULL);
-    gst_element_link_many (q, conv, text_overlay, scale, conv2, NULL);
-    gst_element_set_locked_state (q, FALSE);
-    gst_element_set_locked_state (conv, FALSE);
-    gst_element_set_locked_state (text_overlay, FALSE);
-    gst_element_set_locked_state (scale, FALSE);
-    gst_element_set_locked_state (conv2, FALSE);
-    gst_element_sync_state_with_parent (q);
-    gst_element_sync_state_with_parent (conv);
-    gst_element_sync_state_with_parent (text_overlay);
-    gst_element_sync_state_with_parent (scale);
-    gst_element_sync_state_with_parent (conv2);
-#endif
-#if 0
-    //step2: add new stream to webrtc
-    gst_element_link (conv2, receiver_entry->webrtcbin);
-    gst_element_set_locked_state (conv2, FALSE);
-    gst_element_sync_state_with_parent (conv2);
-#endif
-    //g_message ("remote decoded stream is feeding as input to source..........");
-//#endif    
-
-    //Use udpsink to send the stream to another process.
-    {
-    GstElement *henc  = NULL;
-    GstElement *hpay = NULL;
-    GstElement *udpsink = NULL;
-    GstElement *facedetect = NULL;
-    GstElement *fconvert = NULL;
 
     henc = gst_element_factory_make ("vaapih264enc", "h264enc");
+    if (!henc) {
+      g_message ("Failed to Create H/W h264enc,"
+		      "using software which has unknown issue"
+		      "in our pipeline if facedetect is enabled");
+      henc = gst_element_factory_make ("x264enc", "h264enc");
+      g_object_set (henc, "tune", 0x00000004, NULL);
+    }
+
     hpay = gst_element_factory_make ("rtph264pay", "h264pay");
+    
     udpsink = gst_element_factory_make ("udpsink", "udpsink");
-   
-    if (!henc || !hpay || ! udpsink)
-	   exit(0);
+    g_object_set (udpsink, "host", "127.0.0.1", NULL);
+    g_object_set (udpsink, "port", 5600, NULL);
+  
+    g_assert (henc && hpay && udpsink);
 
     facedetect = gst_element_factory_make ("facedetect", "opencvfacedetect");
     fconvert = gst_element_factory_make ("videoconvert", "fconvert");
-    g_object_set (henc, "tune", 0x00000004, NULL);
-    g_object_set (udpsink, "host", "127.0.0.1", NULL);
-    g_object_set (udpsink, "port", 5600, NULL);
 
     g_assert (conv2 && facedetect && fconvert && fqueue1 && fqueue2);
 
     gst_bin_add_many (GST_BIN (pipe), q, conv, time_overlay, text_overlay,scale, filter , conv2, facedetect , fqueue1, fqueue2, fconvert, henc, hpay, udpsink, NULL);
+
     gst_element_sync_state_with_parent (q);
     gst_element_sync_state_with_parent (conv);
     gst_element_sync_state_with_parent (time_overlay);
@@ -424,11 +277,9 @@ handle_media_stream (GstPad * pad, GstElement * pipe, const char *convert_name,
     gst_element_sync_state_with_parent (hpay);
     gst_element_sync_state_with_parent (udpsink);
     gst_element_link_many (q, conv, time_overlay, /*text_overlay,*/ scale, filter, conv2, fqueue1, facedetect ,fqueue2, fconvert , henc, hpay, udpsink, NULL);
-    //gst_element_link_many (q, conv, time_overlay, text_overlay, scale, filter, conv2, facedetect , fconvert, sink,  NULL);
-    g_message ("elemetntsssssssssssss linked........server side rendering");
 
     send_command (receiver_entry->connection, "REQUEST_SECOND_CONNECTION", NULL);
-    }
+    /***** END: Use udpsink to send the stream to another process ****/
   }
   qpad = gst_element_get_static_pad (q, "sink");
 
@@ -493,9 +344,15 @@ create_receiver_entry (ReceiverEntry *receiver_entry)
   GError *error;
   GstCaps *video_caps;
   GstWebRTCRTPTransceiver *trans = NULL;
-  GstElement *webbin = NULL;
   GArray *transceivers;
   SoupWebsocketConnection * connection = NULL;
+  GstPad *extra_src_pad = NULL;
+  GstPad *webrtcpad = NULL;
+  GstElement *webbin = NULL;
+  GstElement *udpsrc = NULL;
+  GstElement *rtpjitterbuffer = NULL;
+  GstElement *rtpcapsfilter = NULL;
+  GstCaps *rtpcaps = NULL;
 
   if (receiver_entry) {
     connection = receiver_entry->connection;
@@ -510,15 +367,6 @@ create_receiver_entry (ReceiverEntry *receiver_entry)
       G_CALLBACK (soup_websocket_message_cb), (gpointer) receiver_entry);
   } 
   error = NULL;
-
-//#if 0 
-  {
-  GstPad *extra_src_pad = NULL;
-  GstPad *webrtcpad = NULL;
-  GstElement *udpsrc = NULL;
-  GstElement *rtpjitterbuffer = NULL;
-  GstElement *rtpcapsfilter = NULL;
-  GstCaps *rtpcaps = NULL;
 
   udpsrc = gst_element_factory_make ("udpsrc", "udpsrc");
   rtpjitterbuffer = gst_element_factory_make ("rtpjitterbuffer", "rtpjitterbuffer");
@@ -606,7 +454,6 @@ create_receiver_entry (ReceiverEntry *receiver_entry)
   gst_pad_link (extra_src_pad, webrtcpad);
 #endif
 
-  }
 
   /* Incoming streams will be exposed via this signal */
   if (receiver_entry->is_parent) {
