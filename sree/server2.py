@@ -47,6 +47,9 @@ global_loop = None
 
 # Input Args
 global_enable_facedetect = False
+global_enable_faceblur = False
+global_enable_segmentation = False
+global_enable_edgedetect = False
 
 ################# END (globals) ################
 
@@ -96,19 +99,19 @@ def check_plugins():
 
 def get_string_from_json_object (json_object):
 
-  print ("get_string_from_json_object: ",json_object)
+  # print ("debug: get_string_from_json_object: ",json_object)
 
   root = Json.Node.init_object (Json.Node.alloc(), json_object)
   generator = Json.Generator()
   generator.set_root (root)
   text = generator.to_data ()
-  print ("text_from_generator = ",text)
+  # print ("debug: text_from_generator = ",text)
   # Unlike the C api, to_data retuns a tuple
   return text
 
 def send_command (connection, command_type, data):
   
-  print ("send_command: ",command_type)
+  # print ("debug: send_command: ",command_type)
 
   command_json = Json.Object ()
   command_json.set_string_member ("type", command_type)
@@ -117,13 +120,13 @@ def send_command (connection, command_type, data):
 
 def soup_websocket_closed_cb (connection, receiver_entry_table):
 
-  print ("Closed websocket connection ", connection)
+  # print ("debug: Closed websocket connection ", connection)
 
   del receiver_entry_table [connection]
 
 def on_offer_created_cb (promise, receiver_entry):
 
-  print ("================= on_offer_created_cb ===============")
+  # print ("debug: ================= on_offer_created_cb ===============")
 
   reply = promise.get_reply ()
   offer = reply['offer']
@@ -147,14 +150,14 @@ def on_offer_created_cb (promise, receiver_entry):
   receiver_entry.connection.send_text (json_string [0])
 
 def on_negotiation_needed_cb (webrtcbin, receiver_entry):
-  print ("Creating negotiation offer........is_parent = ",receiver_entry.is_parent)
+  # print ("debug: Creating negotiation offer........is_parent = ",receiver_entry.is_parent)
 
   promise = Gst.Promise.new_with_change_func (on_offer_created_cb, receiver_entry)
   webrtcbin.emit ("create-offer", None, promise);
 
 def on_ice_candidate_cb (webrtcbin, mline_index, candidate, receiver_entry):
 
-  print ("On ice candiate cb.............. parent = ",receiver_entry.is_parent)
+  # print ("On ice candiate cb.............. parent = ",receiver_entry.is_parent)
 
   '''
   icemsg = json.dumps({'ice': {'candidate': candidate, 'sdpMLineIndex': mline_index}})
@@ -175,9 +178,9 @@ def on_ice_candidate_cb (webrtcbin, mline_index, candidate, receiver_entry):
   receiver_entry.connection.send_text (json_string[0])
 
 def handle_media_stream (pad, pipe, convert_name, sink_name, receiver_entry):
-  print ("======= Handle media stram =======")
+  # print ("debug:======= Handle media stram =======")
 
-  print ("Trying to handle stream with ", convert_name, " ! ",sink_name)
+  # print ("debug: Trying to handle stream with ", convert_name, " ! ",sink_name)
 
   q = Gst.ElementFactory.make ("queue")
   assert (q)
@@ -204,7 +207,7 @@ def handle_media_stream (pad, pipe, convert_name, sink_name, receiver_entry):
 
   else:
 
-    print ("............Create Video pipeline.................")
+    # print ("debug: ............Create Video pipeline.................")
     process_element = None
 
     time_overlay = Gst.ElementFactory.make ("timeoverlay")
@@ -233,17 +236,26 @@ def handle_media_stream (pad, pipe, convert_name, sink_name, receiver_entry):
     hpay = Gst.ElementFactory.make ("rtph264pay")
     '''
 
-    henc = Gst.ElementFactory.make ("vp8enc")
-    hpay = Gst.ElementFactory.make ("rtpvp8pay")
+    enc = Gst.ElementFactory.make ("vp8enc")
+    enc.set_property ("deadline",1)
+    pay = Gst.ElementFactory.make ("rtpvp8pay")
 
     udpsink = Gst.ElementFactory.make ("udpsink")
     udpsink.set_property ("host", "127.0.0.1")
     udpsink.set_property ("port",5600)
 
-    assert (henc and hpay and udpsink)
-    print ("+===============================glboal ",global_enable_facedetect)
+    assert (enc and pay and udpsink)
+
     if global_enable_facedetect:
       process_element = Gst.ElementFactory.make ("facedetect")
+    elif global_enable_faceblur:
+      process_element = Gst.ElementFactory.make ("faceblur")
+    elif global_enable_segmentation:
+      process_element = Gst.ElementFactory.make ("segmentation")
+      process_element.set_property ("test-mode",True)
+      process_element.set_property ("method", 1)
+    elif global_enable_edgedetect:
+      process_element = Gst.ElementFactory.make ("edgedetect")
     else:
       process_element = Gst.ElementFactory.make ("textoverlay")
       Gst.util_set_object_arg (process_element, "text", "We are Post processing!")
@@ -263,8 +275,8 @@ def handle_media_stream (pad, pipe, convert_name, sink_name, receiver_entry):
     pipe.add (fqueue1)
     pipe.add (fqueue2)
     pipe.add (fconvert)
-    pipe.add (henc)
-    pipe.add (hpay)
+    pipe.add (enc)
+    pipe.add (pay)
     pipe.add (udpsink)
 
     q.sync_state_with_parent ()
@@ -278,8 +290,8 @@ def handle_media_stream (pad, pipe, convert_name, sink_name, receiver_entry):
     process_element.sync_state_with_parent ()
     fqueue2.sync_state_with_parent ()
     fconvert.sync_state_with_parent ()
-    henc.sync_state_with_parent ()
-    hpay.sync_state_with_parent ()
+    enc.sync_state_with_parent ()
+    pay.sync_state_with_parent ()
     udpsink.sync_state_with_parent ()
 
     q.link (conv) 
@@ -291,9 +303,9 @@ def handle_media_stream (pad, pipe, convert_name, sink_name, receiver_entry):
     fqueue1.link(process_element)
     process_element.link(fqueue2)
     fqueue2.link (fconvert)
-    fconvert.link(henc)
-    henc.link(hpay)
-    hpay.link(udpsink)
+    fconvert.link(enc)
+    enc.link(pay)
+    pay.link(udpsink)
 
     send_command (receiver_entry.connection, "REQUEST_SECOND_CONNECTION", None)
     ##### END: Use udpsink to send the stream to another process ####
@@ -307,7 +319,7 @@ def handle_media_stream (pad, pipe, convert_name, sink_name, receiver_entry):
 def on_incoming_decodebin_stream (decodebin, pad, receiver_entry):
   pipe = receiver_entry.pipeline
 
-  print ("=========On incoming decodebin stream==================")
+  # print ("debug: =========On incoming decodebin stream==================")
   if pad.has_current_caps () == False:
     print("Warning: No Caps, ignoring")
     return
@@ -325,7 +337,7 @@ def on_incoming_decodebin_stream (decodebin, pad, receiver_entry):
 
 
 def on_incoming_stream (webrtc, pad, receiver_entry):
-  print ("=============on_incoming_stream=============== ")
+  # print ("debug: =============on_incoming_stream=============== ")
 
   if pad.direction != Gst.PadDirection.SRC:
     return
@@ -342,7 +354,7 @@ def on_incoming_stream (webrtc, pad, receiver_entry):
 
 def create_receiver_entry (receiver_entry):
 
-  print ("------create receiver entry-------")
+  # print ("debug: ------create receiver entry-------")
 
   if receiver_entry:
     connection = receiver_entry.connection
@@ -408,7 +420,7 @@ def create_receiver_entry (receiver_entry):
 def soup_websocket_message_cb (connection, data_type, message, receiver_entry):
   data_string = ""
 
-  print ("websocket message received.....",message)
+  # print ("debug: websocket message received.....",message)
 
   if data_type == Soup.WebsocketDataType(2):
     print ("Error: Received unknown binary message")
@@ -416,7 +428,7 @@ def soup_websocket_message_cb (connection, data_type, message, receiver_entry):
   elif data_type == Soup.WebsocketDataType(1):
     data = message.unref_to_data ()
     data_string = data.decode("utf-8")
-    print("data from message",data_string)
+    # print("debug: data from message",data_string)
 
   json_parser = Json.Parser ()
   if json_parser.load_from_data (data_string, -1) != True:
@@ -438,11 +450,11 @@ def soup_websocket_message_cb (connection, data_type, message, receiver_entry):
       receiver_entry.is_parent = True
     else:
       receiver_entry.is_parent = False
-
-    print ("Reply Type String = ", reply_type_string,
+    '''
+    print ("debug: Reply Type String = ", reply_type_string,
             " is_parent = ",receiver_entry.is_parent,
             " connection = ",receiver_entry.connection)
-
+    '''
     receiver_entry = create_receiver_entry (receiver_entry)
 
     receiver_entry_table[connection] = receiver_entry
@@ -474,18 +486,12 @@ def soup_websocket_message_cb (connection, data_type, message, receiver_entry):
       return
     sdp_string = data_json_object.get_string_member ("sdp")
 
-    print ("Received SDP: ", sdp_string)
+    # print ("debug: Received SDP: ", sdp_string)
 
     (ret,sdp) = GstSdp.sdp_message_new ()
     if ret != 0:
       print ("Failed: sdp_message_new failed")
       return
-
-    #Fixme::::::::::::::::::: sdp_string supposed to be bytes???????!
-    #ret = GstSdp.sdp_message_parse_buffer (data_json_object["sdp"],sdp)
-    #if ret != 0:
-    #  print ("Could not parse SDP string")
-    #  return
 
     (res,sdp) = GstSdp.sdp_message_new_from_text (sdp_string)
 
@@ -509,7 +515,7 @@ def soup_websocket_message_cb (connection, data_type, message, receiver_entry):
       return
     candidate_string = data_json_object.get_string_member ("candidate")
 
-    print ("Received ICE candidate with mline index", mline_index, "candidate: ", candidate_string)
+    # print ("debug: Received ICE candidate with mline index", mline_index, "candidate: ", candidate_string)
 
     receiver_entry.webrtcbin.emit ("add-ice-candidate", mline_index, candidate_string)
   else:
@@ -517,7 +523,7 @@ def soup_websocket_message_cb (connection, data_type, message, receiver_entry):
 
 def soup_websocket_handler(server, connection, path, client_context,receiver_entry_table):
  
-  print ("Processing web socket connection...",connection)
+  # print ("debug: Processing web socket connection...",connection)
 
   connection.connect("closed", soup_websocket_closed_cb, receiver_entry_table)
 
@@ -534,6 +540,9 @@ def hand_inter(signum, frame):
 def main():
   Gst.init(None);
   global global_enable_facedetect
+  global global_enable_faceblur
+  global global_enable_segmentation
+  global global_enable_edgedetect
 
   signal.signal(signal.SIGINT, hand_inter)
 
@@ -542,9 +551,20 @@ def main():
 
   parser = argparse.ArgumentParser()
   parser.add_argument('--enable-facedetect', action='store_true', help='Enable facedetect')
-  global_enable_facedetect = parser.parse_args().enable_facedetect
+  parser.add_argument('--enable-faceblur', action='store_true', help='Enable faceblur')
+  parser.add_argument('--enable-segmentation', action='store_true', help='Enable segmentation')
+  parser.add_argument('--enable-edgedetect', action='store_true', help='Enable edgedetect')
 
-  print ("arg = ",global_enable_facedetect)
+  global_enable_facedetect = parser.parse_args().enable_facedetect
+  global_enable_faceblur = parser.parse_args().enable_faceblur
+  global_enable_segmentation = parser.parse_args().enable_segmentation
+  global_enable_edgedetect = parser.parse_args().enable_edgedetect
+
+  print ("global_enable_facedetect", global_enable_facedetect)
+  print ("enable-faceblur", global_enable_faceblur)
+  print ("global_enable_segmentation",global_enable_segmentation)
+  print ("global_enable_edgedetect", global_enable_edgedetect)
+
   soup_server = Soup.Server ()
   soup_server.add_websocket_handler ("/ws",None, None,
           soup_websocket_handler, receiver_entry_table)
