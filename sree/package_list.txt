@@ -1,0 +1,36 @@
+
+ubuntu package manager method for gstreamer packages
+=====================================================
+sudo apt-get build-dep gstreamer1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+sudo apt-get install gstreamer1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+
+
+**************List of needed packages**********************
+
+libvpx
+================
+
+x264
+================
+
+pango
+================
+
+opencv4
+================
+
+nice
+================
+libnice (nice 0.1.16): //gitlab.freedesktop.org/libnice/libnice
+You may need to install the following packages using your package manager:
+json-glib, libsoup, libnice, libnice-gstreamer1
+
+GStreamer 1.18
+=================
+ - http://gitlab.freedesktop.org/gstreamer/gstreamer
+ - http://gitlab.freedesktop.org/gstreamer/gst-plugins-base
+ - http://gitlab.freedesktop.org/gstreamer/gst-plugins-good
+ - http://gitlab.freedesktop.org/gstreamer/gst-plugins-bad
+ - http://gitlab.freedesktop.org/gstreamer/gst-plugins-ugly
+ - http://gitlab.freedesktop.org/gstreamer/gst-libav
+
