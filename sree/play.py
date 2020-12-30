@@ -1,3 +1,5 @@
+from gi.repository import GObject, Gst
+import gi
 import sys
 import sys
 
@@ -5,11 +7,8 @@ sys.path.insert(
     0, "/home/sreerenj/opt/gstreamer/1.18/lib/python3.8/site-packages/gi/overrides/"
 )
 
-import gi
-
 
 gi.require_version("Gst", "1.0")
-from gi.repository import GObject, Gst
 
 
 def bus_call(bus, message, loop):

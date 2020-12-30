@@ -1,5 +1,18 @@
 # Author: Sreerenj Balachandran <bsreerenj@gmail.com>
 
+from config import SEND_UDP_SRC
+from config import SEND_SRC
+from config import reciever_entry_table
+from config import STUN_SERVER
+from config import SOUP_HTTP_PORT
+from config import RTP_CAPS_VP8
+from config import RTP_PAYLOAD_TYPE
+from websockets.version import version as wsv
+from gi.repository import Gio, Soup
+from gi.repository import GstSdp
+from gi.repository import GstWebRTC
+from gi.repository import Gst
+from gi.repository import Json
 import random
 import ssl
 import websockets
@@ -19,22 +32,9 @@ gi.require_version("GstWebRTC", "1.0")
 gi.require_version("GstSdp", "1.0")
 gi.require_version("Soup", "2.4")
 
-from gi.repository import Json
-from gi.repository import Gst
-from gi.repository import GstWebRTC
-from gi.repository import GstSdp
-from gi.repository import Gio, Soup
-from websockets.version import version as wsv
-
-from config import RTP_PAYLOAD_TYPE
-from config import RTP_CAPS_VP8
-from config import SOUP_HTTP_PORT
-from config import STUN_SERVER
-from config import reciever_entry_table
-from config import SEND_SRC
-from config import SEND_UDP_SRC
 
 ################# Data Structures ####################
+
 class ReceiverEntry:
     """
     * parent pipeline is for the initial connection with a client.
@@ -87,7 +87,8 @@ def check_plugins():
         "videoconvert",
         "videoscale",
     ]
-    missing = list(filter(lambda p: Gst.Registry.get().find_plugin(p) is None, needed))
+    missing = list(
+        filter(lambda p: Gst.Registry.get().find_plugin(p) is None, needed))
     if len(missing):
         print("Missing gstreamer plugins:", missing)
         return False
@@ -131,7 +132,8 @@ def on_offer_created_cb(promise, receiver_entry):
     reply = promise.get_reply()
     offer = reply["offer"]
     local_desc_promise = Gst.Promise.new()
-    receiver_entry.webrtcbin.emit("set-local-description", offer, local_desc_promise)
+    receiver_entry.webrtcbin.emit(
+        "set-local-description", offer, local_desc_promise)
     local_desc_promise.interrupt()
 
     sdp_json = Json.Object.new()
@@ -151,9 +153,11 @@ def on_offer_created_cb(promise, receiver_entry):
 
 
 def on_negotiation_needed_cb(webrtcbin, receiver_entry):
-    print("Creating negotiation offer........is_parent = ", receiver_entry.is_parent)
+    print("Creating negotiation offer........is_parent = ",
+          receiver_entry.is_parent)
 
-    promise = Gst.Promise.new_with_change_func(on_offer_created_cb, receiver_entry)
+    promise = Gst.Promise.new_with_change_func(
+        on_offer_created_cb, receiver_entry)
     webrtcbin.emit("create-offer", None, promise)
 
 
@@ -213,7 +217,8 @@ def handle_media_stream(pad, pipe, convert_name, sink_name, receiver_entry):
         print("............Create Video pipeline.................")
         time_overlay = Gst.ElementFactory.make("timeoverlay")
         text_overlay = Gst.ElementFactory.make("textoverlay")
-        Gst.util_set_object_arg(text_overlay, "text", "We are Post processing!")
+        Gst.util_set_object_arg(text_overlay, "text",
+                                "We are Post processing!")
         Gst.util_set_object_arg(text_overlay, "valignment", "bottom")
         Gst.util_set_object_arg(text_overlay, "halignment", "right")
         Gst.util_set_object_arg(text_overlay, "font-desc", "Sans, 72")
@@ -300,7 +305,8 @@ def handle_media_stream(pad, pipe, convert_name, sink_name, receiver_entry):
         henc.link(hpay)
         hpay.link(udpsink)
 
-        send_command(receiver_entry.connection, "REQUEST_SECOND_CONNECTION", None)
+        send_command(receiver_entry.connection,
+                     "REQUEST_SECOND_CONNECTION", None)
         ##### END: Use udpsink to send the stream to another process ####
 
     qpad = q.get_static_pad("sink")
@@ -322,9 +328,11 @@ def on_incoming_decodebin_stream(decodebin, pad, receiver_entry):
     name = structure.get_name()
 
     if GLib.str_has_prefix(name, "video") == True:
-        handle_media_stream(pad, pipe, "videoconvert", "autovideosink", receiver_entry)
+        handle_media_stream(pad, pipe, "videoconvert",
+                            "autovideosink", receiver_entry)
     elif GLib.str_has_prefix(name, "audio") == True:
-        handle_media_stream(pad, pipe, "audioconvert", "autoaudiosink", receiver_entry)
+        handle_media_stream(pad, pipe, "audioconvert",
+                            "autoaudiosink", receiver_entry)
     else:
         print("Unknown pad  ignoring")
 
@@ -336,7 +344,8 @@ def on_incoming_stream(webrtc, pad, receiver_entry):
         return
 
     decodebin = Gst.ElementFactory.make("decodebin")
-    decodebin.connect("pad-added", on_incoming_decodebin_stream, receiver_entry)
+    decodebin.connect(
+        "pad-added", on_incoming_decodebin_stream, receiver_entry)
     receiver_entry.pipeline.add(decodebin)
     decodebin.sync_state_with_parent()
 
@@ -357,7 +366,8 @@ def create_receiver_entry(receiver_entry):
         return None
 
     udpsrc = Gst.ElementFactory.make("udpsrc", "udpsrc")
-    rtpjitterbuffer = Gst.ElementFactory.make("rtpjitterbuffer", "rtpjitterbuffer")
+    rtpjitterbuffer = Gst.ElementFactory.make(
+        "rtpjitterbuffer", "rtpjitterbuffer")
     rtpcapsfilter = Gst.ElementFactory.make("capsfilter", "rtpcapsfilter")
 
     assert udpsrc and rtpjitterbuffer and rtpcapsfilter
@@ -368,19 +378,23 @@ def create_receiver_entry(receiver_entry):
     udpsrc.set_property("multicast-iface", False)
     udpsrc.set_property("auto-multicast", True)
 
-    rtpcaps = Gst.Caps.from_string("application/x-rtp, encoding-name=H264, payload=96")
+    rtpcaps = Gst.Caps.from_string(
+        "application/x-rtp, encoding-name=H264, payload=96")
     assert rtpcaps
 
     rtpcapsfilter.set_property("caps", rtpcaps)
 
     if receiver_entry.is_parent:
-        receiver_entry.extra_src = Gst.parse_bin_from_description(SEND_SRC, True)
+        receiver_entry.extra_src = Gst.parse_bin_from_description(
+            SEND_SRC, True)
     else:
-        receiver_entry.extra_src = Gst.parse_bin_from_description(SEND_UDP_SRC, True)
+        receiver_entry.extra_src = Gst.parse_bin_from_description(
+            SEND_UDP_SRC, True)
 
     receiver_entry.pipeline = Gst.Pipeline.new("pipeline")
 
-    receiver_entry.webrtcbin = Gst.ElementFactory.make("webrtcbin", "webrtcbin")
+    receiver_entry.webrtcbin = Gst.ElementFactory.make(
+        "webrtcbin", "webrtcbin")
 
     assert (
         receiver_entry.extra_src
@@ -454,7 +468,8 @@ def soup_websocket_message_cb(connection, data_type, message, receiver_entry):
     root_json_object = root_json.get_object()
 
     if root_json_object.has_member("REPLY_CONNECTION_TYPE"):
-        reply_type_string = root_json_object.get_string_member("REPLY_CONNECTION_TYPE")
+        reply_type_string = root_json_object.get_string_member(
+            "REPLY_CONNECTION_TYPE")
 
         if GLib.strcmp0(reply_type_string, "parent") == 0:
             receiver_entry.is_parent = True
@@ -524,7 +539,8 @@ def soup_websocket_message_cb(connection, data_type, message, receiver_entry):
             return
 
         promise = Gst.Promise.new()
-        receiver_entry.webrtcbin.emit("set-remote-description", answer, promise)
+        receiver_entry.webrtcbin.emit(
+            "set-remote-description", answer, promise)
         promise.interrupt()
 
     elif GLib.strcmp0(type_string, "ice") == 0:
@@ -558,7 +574,8 @@ def soup_websocket_handler(
 
     print("Processing web socket connection...", connection)
 
-    connection.connect("closed", soup_websocket_closed_cb, receiver_entry_table)
+    connection.connect("closed", soup_websocket_closed_cb,
+                       receiver_entry_table)
 
     receiver_entry = ReceiverEntry(connection)
     receiver_entry_table[connection] = receiver_entry
