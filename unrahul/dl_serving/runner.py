@@ -56,7 +56,8 @@ async def load_model(request):
                 {"status": "fail", "result": "model or path not retievable"}
             )
         return response.json(
-            {"status": "ok", "result": f"model {req['name']} loading in progress"}
+            {"status": "ok",
+                "result": f"model {req['name']} loading in progress"}
         )
     else:
         model_loader = None

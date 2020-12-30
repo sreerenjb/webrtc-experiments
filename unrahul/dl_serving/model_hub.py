@@ -44,7 +44,8 @@ class ModelLoader:
             if not self.m_kwargs.get("pretrained", None):
                 self.m_kwargs["pretrained"] = True
             if is_model_cached(self.m_path, self.m_name):
-                self.model = torch.hub.load(self.m_path, self.m_name, **self.m_kwargs)
+                self.model = torch.hub.load(
+                    self.m_path, self.m_name, **self.m_kwargs)
                 self.model.eval()
                 self.loaded = True
         except TypeError as e:
@@ -53,7 +54,8 @@ class ModelLoader:
     def load_model(self):
         """load model artifacts from model_hub."""
         try:
-            self.model = torch.hub.load(self.m_path, self.m_name, **self.m_kwargs)
+            self.model = torch.hub.load(
+                self.m_path, self.m_name, **self.m_kwargs)
             self.model.eval()
             self.loaded = True
         except AttributeError as e:

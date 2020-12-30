@@ -8,7 +8,8 @@ from os.path import join
 
 from logger import logger
 
-def is_model_cached(model_repo: str = "", model_name: str = "", cache_dir : str= "/root/.cache/torch/hub"):
+
+def is_model_cached(model_repo: str = "", model_name: str = "", cache_dir: str = "/root/.cache/torch/hub"):
     """check if the model(pretrained) is cached locally."""
     if not (model_repo and model_name):
         raise ValueError("model_repo or model_name not provided")
